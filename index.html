@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Asistencia - Posgrado IA y Sentencia Judicial</title>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    [hidden] { display: none !important; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #f0ebf8;
+      font-family: Roboto, Arial, sans-serif;
+      color: #202124;
+    }
+    .contenedor { max-width: 640px; margin: 0 auto; padding: 12px 12px 40px; }
+    .tarjeta {
+      background: #fff;
+      border: 1px solid #dadce0;
+      border-radius: 8px;
+      margin-top: 12px;
+      padding: 24px;
+      box-shadow: 0 1px 2px rgba(60, 64, 67, .3);
+    }
+    .cabecera { border-top: 10px solid #673ab7; }
+    h1 { font-size: 28px; font-weight: 400; margin: 0 0 12px; line-height: 1.25; }
+    .subtitulo { font-size: 14px; color: #5f6368; margin: 0; }
+    label { display: block; font-size: 16px; font-weight: 500; margin-bottom: 4px; }
+    .ayuda { font-size: 13px; color: #5f6368; margin-bottom: 8px; }
+    input[type="text"] {
+      width: 100%;
+      font: inherit;
+      font-size: 18px;
+      padding: 8px 0;
+      border: 0;
+      border-bottom: 1px solid #dadce0;
+      outline: none;
+      background: transparent;
+      letter-spacing: 1px;
+    }
+    input[type="text"]:focus { border-bottom: 2px solid #673ab7; padding-bottom: 7px; }
+    input[type="text"]:disabled { color: #80868b; }
+    .msg { color: #d93025; font-size: 14px; margin-top: 12px; min-height: 18px; }
+    button {
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 500;
+      background: #673ab7;
+      color: #fff;
+      border: 0;
+      border-radius: 4px;
+      padding: 10px 24px;
+      cursor: pointer;
+      margin-top: 20px;
+    }
+    button:hover:not(:disabled) { background: #5e35b1; box-shadow: 0 1px 3px rgba(0, 0, 0, .3); }
+    button:disabled { background: #b8a4dc; cursor: not-allowed; }
+    button.grande { width: 100%; font-size: 20px; padding: 18px 24px; }
+    .nombre { font-size: 22px; font-weight: 500; margin: 4px 0 0; word-break: break-word; }
+    .texto-error { font-size: 16px; color: #d93025; margin: 0; }
+    .texto-ok { font-size: 18px; margin: 0; }
+    .cargando { display: flex; align-items: center; gap: 12px; font-size: 14px; color: #5f6368; }
+    .spinner {
+      width: 22px; height: 22px;
+      border: 3px solid #e0d7f0;
+      border-top-color: #673ab7;
+      border-radius: 50%;
+      animation: giro .8s linear infinite;
+    }
+    @keyframes giro { to { transform: rotate(360deg); } }
+    @media (max-width: 480px) {
+      h1 { font-size: 24px; }
+      .tarjeta { padding: 18px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="contenedor">
+
+    <div class="tarjeta cabecera">
+      <h1>Posgrado - Inteligencia Artificial y Sentencia Judicial</h1>
+      <p class="subtitulo">Registro de asistencia</p>
+    </div>
+
+    <div class="tarjeta cargando" id="cargando" hidden>
+      <div class="spinner"></div><span>Procesando…</span>
+    </div>
+
+    <form class="tarjeta" id="p-busqueda" novalidate autocomplete="off">
+      <label for="dni">DNI <span style="color:#d93025">*</span></label>
+      <div class="ayuda">Sin puntos, solo números</div>
+      <input type="text" id="dni" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="Tu respuesta">
+      <div class="msg" id="msg-busqueda" role="alert"></div>
+      <button type="submit" id="btn-buscar">Siguiente</button>
+    </form>
+
+    <div class="tarjeta" id="p-error" hidden>
+      <p class="texto-error">El agente no se encuentra en el listado habilitado a cursar.</p>
+      <button type="button" id="btn-volver">Volver</button>
+    </div>
+
+    <div class="tarjeta" id="p-confirmacion" hidden>
+      <div class="ayuda">Apellido y Nombre</div>
+      <p class="nombre" id="nombre-conf"></p>
+      <div class="msg" id="msg-confirmacion" role="alert"></div>
+      <button type="button" class="grande" id="btn-presente">Presente</button>
+    </div>
+
+    <div class="tarjeta" id="p-ya" hidden>
+      <div class="ayuda">Apellido y Nombre</div>
+      <p class="nombre" id="nombre-ya"></p>
+      <p class="texto-ok" style="margin-top:16px">Ya enviaste una respuesta.</p>
+    </div>
+
+    <div class="tarjeta" id="p-exito" hidden>
+      <p class="texto-ok">Respuesta enviada</p>
+    </div>
+
+  </div>
+
+  <script>
+    (function () {
+      var API_URL = 'https://script.google.com/macros/s/AKfycbyNQKu8RhsVc_nrIK7rYiJSofGIr7TjnCzp16Jn_Tm_CDiVWgU4L34DAPY-ETJw65U/exec';
+      var TIMEOUT_MS = 45000;
+
+      var ocupado = false;
+      var dniActual = '';
+      var pantallas = ['p-busqueda', 'p-error', 'p-confirmacion', 'p-ya', 'p-exito'];
+
+      function el(id) { return document.getElementById(id); }
+
+      function mostrar(id) {
+        pantallas.forEach(function (p) { el(p).hidden = (p !== id); });
+      }
+
+      function cargando(on) {
+        ocupado = on;
+        el('cargando').hidden = !on;
+        el('btn-buscar').disabled = on;
+        el('btn-presente').disabled = on;
+        el('dni').disabled = on;
+      }
+
+      // POST sin headers personalizados (text/plain) para evitar preflight CORS.
+      function llamar(accion, dni) {
+        var ctrl = new AbortController();
+        var t = setTimeout(function () { ctrl.abort(); }, TIMEOUT_MS);
+        return fetch(API_URL, {
+          method: 'POST',
+          body: JSON.stringify({ accion: accion, dni: dni }),
+          signal: ctrl.signal
+        })
+          .then(function (resp) {
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            return resp.json();
+          })
+          .then(function (data) { clearTimeout(t); return data; })
+          .catch(function (err) { clearTimeout(t); throw err; });
+      }
+
+      el('dni').addEventListener('input', function () {
+        var limpio = this.value.replace(/\D/g, '');
+        if (this.value !== limpio) this.value = limpio;
+      });
+
+      el('p-busqueda').addEventListener('submit', function (ev) {
+        ev.preventDefault();
+        if (ocupado) return;
+        var dni = el('dni').value.replace(/\D/g, '');
+        el('dni').value = dni;
+        if (!dni) {
+          el('msg-busqueda').textContent = 'Ingresá tu DNI (solo números).';
+          return;
+        }
+        el('msg-busqueda').textContent = '';
+        cargando(true);
+        llamar('verificar', dni)
+          .then(function (r) {
+            cargando(false);
+            if (!r) {
+              el('msg-busqueda').textContent = 'Respuesta inválida del servidor. Volvé a tocar "Siguiente".';
+              return;
+            }
+            if (r.ok) {
+              dniActual = dni;
+              if (r.yaRegistrado) {
+                el('nombre-ya').textContent = r.nombre;
+                mostrar('p-ya');
+              } else {
+                el('nombre-conf').textContent = r.nombre;
+                el('msg-confirmacion').textContent = '';
+                mostrar('p-confirmacion');
+              }
+            } else if (r.noEncontrado) {
+              mostrar('p-error');
+            } else {
+              el('msg-busqueda').textContent = r.mensaje || 'Ocurrió un error. Volvé a tocar "Siguiente".';
+            }
+          })
+          .catch(function () {
+            cargando(false);
+            el('msg-busqueda').textContent = 'No se pudo conectar. Revisá tu conexión y volvé a tocar "Siguiente".';
+          });
+      });
+
+      el('btn-presente').addEventListener('click', function () {
+        if (ocupado) return;
+        el('msg-confirmacion').textContent = '';
+        cargando(true);
+        llamar('registrar', dniActual)
+          .then(function (r) {
+            cargando(false);
+            if (!r) {
+              el('msg-confirmacion').textContent = 'Respuesta inválida del servidor. Volvé a tocar "Presente".';
+              return;
+            }
+            if (r.ok) {
+              if (r.yaRegistrado) {
+                el('nombre-ya').textContent = el('nombre-conf').textContent;
+                mostrar('p-ya');
+              } else {
+                mostrar('p-exito');
+              }
+            } else if (r.noEncontrado) {
+              mostrar('p-error');
+            } else {
+              el('msg-confirmacion').textContent = (r.mensaje || 'Ocurrió un error.') + ' Volvé a tocar "Presente".';
+            }
+          })
+          .catch(function () {
+            cargando(false);
+            el('msg-confirmacion').textContent = 'No se pudo confirmar el registro. Volvé a tocar "Presente": si ya se había guardado, te lo va a informar.';
+          });
+      });
+
+      el('btn-volver').addEventListener('click', function () {
+        el('dni').value = '';
+        el('msg-busqueda').textContent = '';
+        mostrar('p-busqueda');
+        el('dni').focus();
+      });
+
+      mostrar('p-busqueda');
+    })();
+  </script>
+</body>
+</html>
