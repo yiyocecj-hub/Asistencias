@@ -132,6 +132,7 @@
 
       var ocupado = false;
       var dniActual = '';
+      var presenteReintento = false; // un "Presente" anterior falló: el registro pudo haberse grabado
       var pantallas = ['p-busqueda', 'p-error', 'p-confirmacion', 'p-ya', 'p-exito'];
 
       function el(id) { return document.getElementById(id); }
@@ -198,6 +199,7 @@
               try { data = JSON.parse(txt); }
               catch (e) { throw fallo('RESPUESTA_NO_JSON', txt.slice(0, 120).replace(/\s+/g, ' ')); }
               pendientes = pendientes.filter(function (x) { return enviados.indexOf(x) === -1; });
+              if (data && typeof data === 'object') data._intentos = n;
               return data;
             })
             .catch(function (err) {
@@ -253,6 +255,7 @@
             }
             if (r.ok) {
               dniActual = dni;
+              presenteReintento = false;
               if (r.yaRegistrado) {
                 el('nombre-ya').textContent = r.nombre;
                 mostrar('p-ya');
@@ -285,7 +288,9 @@
               return;
             }
             if (r.ok) {
-              if (r.yaRegistrado) {
+              // Si un intento anterior de este "Presente" falló (reintento automático o
+              // nuevo toque), "ya registrado" significa que ese intento sí se grabó.
+              if (r.yaRegistrado && !(presenteReintento || r._intentos > 1)) {
                 el('nombre-ya').textContent = el('nombre-conf').textContent;
                 mostrar('p-ya');
               } else {
@@ -299,6 +304,7 @@
           })
           .catch(function (err) {
             cargando(false);
+            presenteReintento = true;
             el('msg-confirmacion').textContent = 'No se pudo confirmar el registro. Volvé a tocar "Presente": si ya se había guardado, te lo va a informar. ' + textoError(err);
           });
       });
