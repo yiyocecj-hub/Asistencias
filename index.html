@@ -58,6 +58,16 @@
     button:disabled { background: #b8a4dc; cursor: not-allowed; }
     button.grande { width: 100%; font-size: 20px; padding: 18px 24px; }
     .nombre { font-size: 22px; font-weight: 500; margin: 4px 0 0; word-break: break-word; }
+    .modo {
+      display: inline-block;
+      font-size: 16px;
+      font-weight: 500;
+      color: #4527a0;
+      background: #ede7f6;
+      border-radius: 4px;
+      padding: 8px 12px;
+      margin-top: 16px;
+    }
     .texto-error { font-size: 16px; color: #d93025; margin: 0; }
     .texto-ok { font-size: 18px; margin: 0; }
     .cargando { display: flex; align-items: center; gap: 12px; font-size: 14px; color: #5f6368; }
@@ -103,6 +113,7 @@
     <div class="tarjeta" id="p-confirmacion" hidden>
       <div class="ayuda">Apellido y Nombre</div>
       <p class="nombre" id="nombre-conf"></p>
+      <div class="modo" id="modo-conf" hidden></div>
       <div class="msg" id="msg-confirmacion" role="alert"></div>
       <button type="button" class="grande" id="btn-presente">Presente</button>
     </div>
@@ -110,11 +121,12 @@
     <div class="tarjeta" id="p-ya" hidden>
       <div class="ayuda">Apellido y Nombre</div>
       <p class="nombre" id="nombre-ya"></p>
-      <p class="texto-ok" style="margin-top:16px">Ya enviaste una respuesta.</p>
+      <p class="texto-ok" style="margin-top:16px">Ya enviaste una respuesta<span id="modo-ya"></span>.</p>
     </div>
 
     <div class="tarjeta" id="p-exito" hidden>
       <p class="texto-ok">Respuesta enviada</p>
+      <div class="modo" id="modo-exito" hidden></div>
     </div>
 
   </div>
@@ -136,6 +148,11 @@
       var pantallas = ['p-busqueda', 'p-error', 'p-confirmacion', 'p-ya', 'p-exito'];
 
       function el(id) { return document.getElementById(id); }
+
+      // El modo (entrada/salida) lo decide el servidor; acá solo se muestra.
+      function nombreModo(m) {
+        return m === 'entrada' ? 'ENTRADA' : (m === 'salida' ? 'SALIDA' : '');
+      }
 
       function mostrar(id) {
         pantallas.forEach(function (p) { el(p).hidden = (p !== id); });
@@ -256,11 +273,15 @@
             if (r.ok) {
               dniActual = dni;
               presenteReintento = false;
+              var m = nombreModo(r.modo);
               if (r.yaRegistrado) {
                 el('nombre-ya').textContent = r.nombre;
+                el('modo-ya').textContent = m ? ' de ' + m : '';
                 mostrar('p-ya');
               } else {
                 el('nombre-conf').textContent = r.nombre;
+                el('modo-conf').textContent = m ? 'Vas a registrar tu ' + m : '';
+                el('modo-conf').hidden = !m;
                 el('msg-confirmacion').textContent = '';
                 mostrar('p-confirmacion');
               }
@@ -290,10 +311,16 @@
             if (r.ok) {
               // Si un intento anterior de este "Presente" falló (reintento automático o
               // nuevo toque), "ya registrado" significa que ese intento sí se grabó.
+              var mr = nombreModo(r.modo);
               if (r.yaRegistrado && !(presenteReintento || r._intentos > 1)) {
                 el('nombre-ya').textContent = el('nombre-conf').textContent;
+                el('modo-ya').textContent = mr ? ' de ' + mr : '';
                 mostrar('p-ya');
               } else {
+                // Muestra lo que el servidor registró realmente (puede diferir de la
+                // leyenda previa si se cruzó la hora de corte).
+                el('modo-exito').textContent = mr ? mr + ' registrada' : '';
+                el('modo-exito').hidden = !mr;
                 mostrar('p-exito');
               }
             } else if (r.noEncontrado) {
