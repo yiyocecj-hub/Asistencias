@@ -138,8 +138,12 @@
       var API_URL = 'https://script.google.com/macros/s/AKfycbyNQKu8RhsVc_nrIK7rYiJSofGIr7TjnCzp16Jn_Tm_CDiVWgU4L34DAPY-ETJw65U/exec';
       var TIMEOUT_MS = 30000;        // tope total de una consulta (todos los intentos juntos)
       var MAX_INTENTOS = 3;
-      var HEDGE_MS = [6000, 8000];   // si no hay respuesta: 2º intento a los 6 s y 3º a los 14 s (en paralelo, sin cortar el anterior)
-      var AVISO_MS = 6000;           // a los 6 s se cambia el texto de "Procesando…"
+      // Si no hay respuesta, se lanza otro intento en paralelo sin cortar el anterior.
+      // Buscar (verificar) es liviano: 2º intento a los 3 s y 3º a los 7 s.
+      // Registrar escribe en la hoja con lock: 2º a los 6 s y 3º a los 14 s.
+      var HEDGE_VERIFICAR_MS = [3000, 4000];
+      var HEDGE_REGISTRAR_MS = [6000, 8000];
+      var AVISO_MS = 5000;           // a los 5 s se cambia el texto de "Procesando…"
 
       // Identificador de esta visita: aparece en pantalla ante un error y en la hoja LogEventos.
       var sid = Math.random().toString(36).slice(2, 8);
@@ -212,6 +216,7 @@
       function llamar(accion, dni) {
         return new Promise(function (resolve, reject) {
           var lanzados = 0, enVuelo = 0, terminado = false;
+          var hedge = (accion === 'verificar') ? HEDGE_VERIFICAR_MS : HEDGE_REGISTRAR_MS;
           var ctrls = [];
           var timerHedge = null, timerBackoff = null, timerTotal = null;
 
@@ -245,7 +250,7 @@
             var enviados = pendientes.splice(0); // se llevan estos fallos; si el intento falla, se devuelven
             var ta = Date.now();
             clearTimeout(timerHedge);
-            if (n < MAX_INTENTOS) timerHedge = setTimeout(lanzar, HEDGE_MS[n - 1]);
+            if (n < MAX_INTENTOS) timerHedge = setTimeout(lanzar, hedge[n - 1]);
 
             fetch(API_URL, {
               method: 'POST',
