@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Asistencia - Posgrado IA y Sentencia Judicial</title>
+  <link rel="preconnect" href="https://script.google.com" crossorigin>
+  <link rel="preconnect" href="https://script.googleusercontent.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap" rel="stylesheet">
   <style>
     [hidden] { display: none !important; }
@@ -134,8 +136,10 @@
   <script>
     (function () {
       var API_URL = 'https://script.google.com/macros/s/AKfycbyNQKu8RhsVc_nrIK7rYiJSofGIr7TjnCzp16Jn_Tm_CDiVWgU4L34DAPY-ETJw65U/exec';
-      var TIMEOUT_MS = 45000;
+      var TIMEOUT_MS = 30000;        // tope total de una consulta (todos los intentos juntos)
       var MAX_INTENTOS = 3;
+      var HEDGE_MS = [6000, 8000];   // si no hay respuesta: 2º intento a los 6 s y 3º a los 14 s (en paralelo, sin cortar el anterior)
+      var AVISO_MS = 6000;           // a los 6 s se cambia el texto de "Procesando…"
 
       // Identificador de esta visita: aparece en pantalla ante un error y en la hoja LogEventos.
       var sid = Math.random().toString(36).slice(2, 8);
@@ -158,10 +162,17 @@
         pantallas.forEach(function (p) { el(p).hidden = (p !== id); });
       }
 
+      var timerAviso = null;
       function cargando(on, texto) {
         ocupado = on;
+        clearTimeout(timerAviso);
         el('cargando').hidden = !on;
         el('txt-cargando').textContent = texto || 'Procesando…';
+        if (on) {
+          timerAviso = setTimeout(function () {
+            if (ocupado) el('txt-cargando').textContent = 'Sigue procesando, no cierres esta pantalla…';
+          }, AVISO_MS);
+        }
         el('btn-buscar').disabled = on;
         el('btn-presente').disabled = on;
         el('dni').disabled = on;
@@ -192,58 +203,108 @@
       }
 
       // POST sin headers personalizados (text/plain) para evitar preflight CORS.
-      // Reintenta ante fallos de red, HTTP no-2xx o respuesta que no es JSON.
-      // No reintenta tras TIMEOUT. Es seguro reintentar "registrar": el servidor
-      // devuelve "ya registrado" si la celda tiene contenido.
+      // Si un intento no responde en HEDGE_MS, se lanza otro EN PARALELO sin cortar el
+      // anterior; gana el primero que devuelva JSON válido y se cancelan los demás.
+      // Si un intento falla y no queda ninguno en vuelo, se reintenta tras una espera corta.
+      // Máximo MAX_INTENTOS intentos y TIMEOUT_MS en total.
+      // Es seguro repetir "registrar": el servidor devuelve "ya registrado" si la celda
+      // ya tiene contenido.
       function llamar(accion, dni) {
-        function intentar(n) {
-          var ctrl = new AbortController();
-          var timer = setTimeout(function () { ctrl.abort(); }, TIMEOUT_MS);
-          var enviados = pendientes.slice();
-          var ta = Date.now();
-          return fetch(API_URL, {
-            method: 'POST',
-            body: JSON.stringify({ accion: accion, dni: dni, sid: sid, intento: n, errPrevios: enviados }),
-            signal: ctrl.signal
-          })
-            .then(function (resp) {
-              if (!resp.ok) { throw fallo('HTTP ' + resp.status); }
-              return resp.text();
-            })
-            .then(function (txt) {
-              clearTimeout(timer);
-              var data;
-              try { data = JSON.parse(txt); }
-              catch (e) { throw fallo('RESPUESTA_NO_JSON', txt.slice(0, 120).replace(/\s+/g, ' ')); }
-              pendientes = pendientes.filter(function (x) { return enviados.indexOf(x) === -1; });
-              if (data && typeof data === 'object') data._intentos = n;
-              return data;
-            })
-            .catch(function (err) {
-              clearTimeout(timer);
-              var f = (err && err.cod) ? err
-                : fallo(err && err.name === 'AbortError' ? 'TIMEOUT' : 'FETCH', err && err.message);
-              pendientes.push({
-                id: sid + '-' + (++contErr),
-                accion: accion,
-                intento: n,
-                cod: f.cod,
-                det: String(f.det || '').slice(0, 120),
-                ms: Date.now() - ta,
-                cli: infoCliente(),
-                t: new Date().toISOString()
-              });
-              if (window.console) console.error('Fallo de llamada', f.cod, f.det);
-              if (f.cod === 'TIMEOUT' || n >= MAX_INTENTOS) {
-                f.intentos = n;
-                throw f;
-              }
-              var espera = 800 * n + Math.floor(Math.random() * 700);
-              return new Promise(function (ok) { setTimeout(ok, espera); })
-                .then(function () { return intentar(n + 1); });
+        return new Promise(function (resolve, reject) {
+          var lanzados = 0, enVuelo = 0, terminado = false;
+          var ctrls = [];
+          var timerHedge = null, timerBackoff = null, timerTotal = null;
+
+          function cerrar() {
+            terminado = true;
+            clearTimeout(timerHedge); clearTimeout(timerBackoff); clearTimeout(timerTotal);
+            ctrls.forEach(function (c) { try { c.abort(); } catch (e) { } });
+          }
+
+          function anotar(f, n, ta) {
+            pendientes.push({
+              id: sid + '-' + (++contErr),
+              accion: accion,
+              intento: n,
+              cod: f.cod,
+              det: String(f.det || '').slice(0, 120),
+              ms: Date.now() - ta,
+              par: enVuelo,
+              cli: infoCliente(),
+              t: new Date().toISOString()
             });
-        }
-        return intentar(1);
+            if (window.console) console.error('Fallo de llamada', f.cod, f.det);
+          }
+
+          function lanzar() {
+            if (terminado || lanzados >= MAX_INTENTOS) return;
+            var n = ++lanzados;
+            enVuelo++;
+            var ctrl = new AbortController();
+            ctrls.push(ctrl);
+            var enviados = pendientes.splice(0); // se llevan estos fallos; si el intento falla, se devuelven
+            var ta = Date.now();
+            clearTimeout(timerHedge);
+            if (n < MAX_INTENTOS) timerHedge = setTimeout(lanzar, HEDGE_MS[n - 1]);
+
+            fetch(API_URL, {
+              method: 'POST',
+              body: JSON.stringify({ accion: accion, dni: dni, sid: sid, intento: n, errPrevios: enviados }),
+              signal: ctrl.signal
+            })
+              .then(function (resp) {
+                if (!resp.ok) { throw fallo('HTTP ' + resp.status); }
+                return resp.text();
+              })
+              .then(function (txt) {
+                var data;
+                try { data = JSON.parse(txt); }
+                catch (e) { throw fallo('RESPUESTA_NO_JSON', txt.slice(0, 120).replace(/\s+/g, ' ')); }
+                if (terminado) return;
+                if (data && typeof data === 'object') data._intentos = n;
+                enVuelo--;
+                cerrar();
+                resolve(data);
+              })
+              .catch(function (err) {
+                if (terminado) return; // intento cancelado porque otro ya ganó, o se agotó el tiempo
+                enVuelo--;
+                var f = (err && err.cod) ? err : fallo('FETCH', err && err.message);
+                pendientes = enviados.concat(pendientes);
+                anotar(f, n, ta);
+                if (enVuelo > 0) return; // otro intento sigue esperando
+                if (lanzados >= MAX_INTENTOS) {
+                  f.intentos = lanzados;
+                  cerrar();
+                  reject(f);
+                  return;
+                }
+                clearTimeout(timerHedge);
+                timerBackoff = setTimeout(lanzar, 800 * n + Math.floor(Math.random() * 700));
+              });
+          }
+
+          timerTotal = setTimeout(function () {
+            if (terminado) return;
+            var f = fallo('TIMEOUT', 'sin respuesta en ' + Math.round(TIMEOUT_MS / 1000) + ' s');
+            f.intentos = lanzados;
+            anotar(f, lanzados, Date.now() - TIMEOUT_MS);
+            cerrar();
+            reject(f);
+          }, TIMEOUT_MS);
+
+          lanzar();
+        });
+      }
+
+      // Aviso al servidor al cargar la página: lo deja activo antes de la primera consulta.
+      // Si falla no importa: no se muestra ni se anota nada.
+      function calentar() {
+        try {
+          fetch(API_URL, { method: 'POST', body: JSON.stringify({ accion: 'ping', sid: sid }) })
+            .then(function (r) { return r.text(); })
+            .catch(function () { });
+        } catch (e) { }
       }
       // </llamar>
 
@@ -344,6 +405,7 @@
       });
 
       mostrar('p-busqueda');
+      calentar();
     })();
   </script>
 </body>
